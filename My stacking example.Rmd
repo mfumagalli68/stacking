@@ -1,0 +1,123 @@
+---
+title: "My stacking example"
+author: "Fumagalli"
+date: "08 dicembre 2016"
+output: html_document
+---
+level 0: randomforest + ridge regression
+level 1: linear regression
+```{r}
+#importing library
+library(MASS)
+library(randomForest)
+library(glmnet)
+library(Metrics)
+#I'll use some data easy to retrieve, like Boston data
+data<-Boston[0:300,]
+test<-Boston[301:nrow(Boston),]
+
+
+```
+
+```{r auxiliary function}
+#Function to extract fold in order to perform cv
+#it returns two list whose elements are the data in that fold
+k_foldcv<-function(data)
+{
+  #train e test saranno due liste di liste dove ogni lista contiene gli elementi del dataset selezionati dal fold
+  train<-list()
+  test<-list()
+  K<-5
+  folds <- sample( rep(1:K,length=nrow(data)) )
+  for( i in 1:K)
+  {
+  train[[paste("fold",i,sep="")]]<-data[which(i!=folds),]
+  test[[paste("foldtest",i,sep="")]]<-data[which(i==folds),]
+  }
+  
+    return (list(train=train,test=test))
+}
+
+
+#level 0 training 
+
+#Function to train the model on fold. Then i make prediction on testset (hold out in the cv procedure). it returns a list whose elements are vector of prediction togheter with the real target we 'd like to predict.
+#it takes as args a string( the name of the model) and data.
+train<-function(data,model)
+{
+  #browser()
+  fold<-k_foldcv(data)
+  prediction_rf<-list()
+  prediction_ridge<-list()
+  if(model=="randomForest")
+  {
+    for( i in 1:length(fold$train))
+  {
+  mod<-randomForest(medv~.,data=get(paste("fold",i,sep=""),fold$train),mtry=5)
+  prediction_rf[[i]]<-list(yhat=predict(mod,newdata=get(paste("foldtest",i,sep=""),fold$test)),y=get(paste("foldtest",i,sep=""),fold$test)$medv)
+  }
+  return (prediction_rf)
+    }
+  else
+  {
+       for( i in 1:length(fold$train))
+  {
+  x.ridge<-model.matrix(medv~.,data=get(paste("fold",i,sep=""),fold$train))[,-1]
+  mod_ridge<-glmnet(x.ridge,get(paste("fold",i,sep=""),fold$train)$medv,alpha=0)
+  grid<-seq(0,3,by=0.01)
+  lambda.min<-cv.glmnet(x.ridge,get(paste("fold",i,sep=""),fold$train)$medv,lambda=grid,nfolds=5)$lambda.min
+  mod_ridge<-glmnet(x.ridge,get(paste("fold",i,sep=""),fold$train)$medv,alpha=0,lambda=lambda.min)
+  prediction_ridge[[i]]<-list(yhat=predict(mod_ridge,newx=model.matrix(medv~.,data=get(paste("foldtest",i,sep=""),fold$test))[,-1],s=lambda.min),
+y=get(paste("fold",i,sep=""),fold$train)$medv)
+       }
+    return (prediction_ridge)
+  
+  }
+  
+  
+}
+
+```
+Training model
+```{r}
+
+predict_rf<-train(data,"randomForest")
+predict_ridge<-train(data,"ridge")
+
+#level 1. create predictors
+rf_yhat <- do.call(c,lapply(predict_rf,function(x){x$yhat}))
+ridge_yhat <- do.call(c,lapply(predict_ridge,function(x){x$yhat}))
+
+y <- do.call(c,lapply(predict_rf,function(x){x$y}))
+predictors<-data.frame(rf=rf_yhat,X1=ridge_yhat,y=y)
+
+#model prediction with all data
+mod_rf<-randomForest(medv~.,data=data)
+test_rf_yhat <- predict(mod_rf,newdata=test,type = "response")
+rmse(test$medv,test_rf_yhat)
+
+#model prediction with all data
+x.ridge<-model.matrix(medv~.,data=data)[,-1]
+mod_ridge<-glmnet(x.ridge,data$medv,alpha=0)
+grid<-seq(0,2,by=0.01)
+lambda.min<-cv.glmnet(x.ridge,data$medv,lambda=grid,nfolds=5)$lambda.min
+mod_ridge<-glmnet(x.ridge,data$medv,alpha=0,lambda=lambda.min)
+test_ridge_yhat<-predict(mod_ridge,newx=model.matrix(medv~.,data=test)[,-1],s=lambda.min)
+rmse(test$medv,test_ridge_yhat)
+
+#test data
+data_test<-data.frame(rf=test_rf_yhat,X1=test_ridge_yhat)
+
+#level 1 train and prediction
+mod_level1<-lm(y~.,data=predictors)
+summary(mod_level1)
+yhat<-predict(mod_level1,newdata=data_test)
+
+length(yhat)
+length(test$medv)
+c(rmse_stacked=rmse(test$medv,yhat),rmse_rf=rmse(test$medv,test_rf_yhat),rmse_ridge=rmse(test$medv,test_ridge_yhat))
+
+```
+
+
+
